@@ -1,0 +1,103 @@
+require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const fs = require('fs');
+
+// Charger les objets depuis le fichier JSON
+let objets = JSON.parse(fs.readFileSync('data.json', 'utf8')).items;
+
+const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+});
+
+client.once('ready', () => {
+    console.log(`✅ Bot connecté en tant que ${client.user.tag}`);
+});
+
+// Commande pour afficher les menus déroulants
+client.on('messageCreate', async (message) => {
+    if (message.content === "!menu") {
+        const types = [...new Set(objets.map(item => item.type))];
+        const collections = [...new Set(objets.map(item => item.collection))];
+
+        const typeMenu = new StringSelectMenuBuilder()
+            .setCustomId('select_type')
+            .setPlaceholder('Sélectionne un type')
+            .addOptions(types.map(type => ({ label: type, value: type })));
+
+        const collectionMenu = new StringSelectMenuBuilder()
+            .setCustomId('select_collection')
+            .setPlaceholder('Sélectionne une collection')
+            .addOptions(collections.map(col => ({ label: col, value: col })));
+
+        const dateMenu = new StringSelectMenuBuilder()
+            .setCustomId('select_date')
+            .setPlaceholder('Filtrer par date')
+            .addOptions([...new Set(objets.map(item => item.date))].map(date => ({ label: date, value: date })));
+
+        const row1 = new ActionRowBuilder().addComponents(typeMenu);
+        const row2 = new ActionRowBuilder().addComponents(collectionMenu);
+        const row3 = new ActionRowBuilder().addComponents(dateMenu);
+
+        await message.reply({ content: "📜 Choisis un filtre :", components: [row1, row2, row3] });
+    }
+
+    if (message.content.startsWith("!add")) {
+        const args = message.content.split("|").map(arg => arg.trim());
+        if (args.length !== 5) {
+            return message.reply("❌ Format incorrect ! Utilise : !add Nom | Type | Collection | Date (YYYY) | Prix");
+        }
+
+        const [nom, type, collection, date, prix] = args;
+        if (isNaN(parseInt(prix))) return message.reply("❌ Le prix doit être un nombre valide.");
+
+        objets.push({ nom, type, collection, date, prix: parseInt(prix) });
+        fs.writeFileSync('data.json', JSON.stringify({ items: objets }, null, 2));
+
+        message.reply(`✅ **${nom}** ajouté avec succès !`);
+    }
+});
+
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isStringSelectMenu()) return;
+
+    let filtre = interaction.values[0];
+    let objetsFiltres = objets.filter(item => item.type === filtre || item.collection === filtre || item.date === filtre);
+
+    if (objetsFiltres.length === 0) {
+        return interaction.reply({ content: "❌ Aucun objet trouvé.", ephemeral: true });
+    }
+
+    let page = 0;
+    const objetsParPage = 3;
+
+    const afficherPage = (p) => {
+        const start = p * objetsParPage;
+        const pageItems = objetsFiltres.slice(start, start + objetsParPage);
+
+        let embed = new EmbedBuilder()
+            .setTitle(`🔍 Résultats pour "${filtre}" - Page ${p + 1}`)
+            .setColor(0x3498db)
+            .setDescription(pageItems.map(item => `**${item.nom}** - 💰 ${item.prix} pièces
+📅 Sortie : ${item.date}`).join("\n\n"));
+
+        return embed;
+    };
+
+    const boutonPrecedent = new ButtonBuilder().setCustomId('prev').setLabel('⬅️').setStyle(ButtonStyle.Primary);
+    const boutonSuivant = new ButtonBuilder().setCustomId('next').setLabel('➡️').setStyle(ButtonStyle.Primary);
+    const row = new ActionRowBuilder().addComponents(boutonPrecedent, boutonSuivant);
+
+    let message = await interaction.reply({ embeds: [afficherPage(page)], components: [row], ephemeral: true });
+
+    const collector = message.createMessageComponentCollector();
+    collector.on('collect', async (buttonInteraction) => {
+        if (buttonInteraction.customId === 'prev' && page > 0) {
+            page--;
+        } else if (buttonInteraction.customId === 'next' && (page + 1) * objetsParPage < objetsFiltres.length) {
+            page++;
+        }
+        await buttonInteraction.update({ embeds: [afficherPage(page)], components: [row] });
+    });
+});
+
+client.login(process.env.TOKEN);
